@@ -1,0 +1,210 @@
+from __future__ import annotations
+
+import hashlib
+import html
+import json
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+
+PROFILE_URL = "https://books.yandex.ru/@b8582783786/quotes"
+PROFILE_LOGIN = "b8582783786"
+
+DECK_NAME = "Yandex Books Vocabulary"
+MODEL_NAME = "YandexBooksVocabulary"
+ANKI_CONNECT_URL = "http://localhost:8765"
+
+EDGE_TTS_VOICE = "en-US-JennyNeural"
+EDGE_TTS_EXAMPLE_VOICE = "en-US-GuyNeural"
+
+DATA_DIR = Path("data")
+PENDING_PATH = DATA_DIR / "quotes_pending.json"
+ENRICHED_PATH = DATA_DIR / "cards_enriched.json"
+AUDIO_DIR = DATA_DIR / "audio"
+CSV_QUOTES_DIR = DATA_DIR / "quotes"
+
+FIELDS = [
+    "Front",
+    "Meaning",
+    "Example",
+    "Sound",
+    "Sound_Meaning",
+    "Sound_Example",
+    "Source",
+]
+
+AUDIO_FIELD_SPECS = [
+    ("Front", "Sound", "front"),
+    ("Meaning", "Sound_Meaning", "meaning"),
+    ("Example", "Sound_Example", "example"),
+]
+
+FRONT_TEMPLATE = """<div style='font-family: Arial; font-size: 70px;color:#FF80DD;'>{{Front}}</div>
+<div style='font-size: 0px; text-align: right;'>{{Sound}}</div>"""
+
+BACK_TEMPLATE = """{{FrontSide}}
+<br><br>
+<div style='box-sizing: border-box; width: 100%; padding: 0 42px;'>
+  <span>
+    <table style='width: 100%; max-width: 900px; margin: 0 auto;'>
+      <tr>
+        <td style='font-family: Arial; font-size: 30px;color:#00aaaa; text-align:left;'>
+          {{Meaning}}
+          <br><br>
+          <div style='font-family: Arial; font-size: 30px;color:#9CFFFA; text-align:left;'>
+            &nbsp;→&nbsp;{{Example}}
+          </div>
+        </td>
+      </tr>
+    </table>
+  </span>
+</div>
+<div style='font-size: 0px; text-align: right;'>{{Sound_Meaning}}</div>
+<div style='font-size: 0px; text-align: right;'>{{Sound_Example}}</div>
+<div style='box-sizing: border-box; width: 100%; padding: 0 42px;'>
+  <div style='font-family: Arial; font-size:20px;color:#aaaa00; text-align: left; max-width: 900px; margin: 0 auto;'>{{Source}}</div>
+</div>"""
+
+CARD_CSS = """.card {
+  font-family: arial;
+  font-size: 20px;
+  text-align: center;
+  color: Black;
+  background-color: Black;
+}"""
+
+
+@dataclass(frozen=True)
+class QuoteCandidate:
+    front: str
+    source: str
+    page_url: str
+
+
+def normalize_front(value: str) -> str:
+    value = html.unescape(value).replace("\u00a0", " ")
+    value = value.strip(" \t\r\n\"'`.,;:!?")
+    return re.sub(r"\s+", " ", value).lower()
+
+
+def is_likely_english_vocabulary(value: str) -> bool:
+    text = value.strip()
+    if not text or len(text) > 80:
+        return False
+    if re.search(r"[\u0400-\u04ff]", text):
+        return False
+    if re.search(r"[.!?;:]", text):
+        return False
+    words = re.findall(r"[A-Za-z]+(?:['’-][A-Za-z]+)?", text)
+    if not words or len(words) > 5:
+        return False
+    if len(words) > 1 and len(words[-1]) == 1:
+        return False
+    compact = re.sub(r"[\s'’\-,]", "", text)
+    return bool(compact) and compact.isascii() and compact.isalpha()
+
+
+def is_quote_meta_line(value: str) -> bool:
+    if value in {"сегодня", "вчера", "позавчера", "в прошлом месяце"}:
+        return True
+    return bool(re.fullmatch(r"\d+\s+(?:день|дня|дней|месяц|месяца|месяцев|год|года|лет)\s+назад", value))
+
+
+def is_generic_source(source: str) -> bool:
+    return source.startswith("Цитаты ") or source == "Yandex Books"
+
+
+def load_cards(path: Path = ENRICHED_PATH) -> list[dict[str, str]]:
+    if not path.exists():
+        raise FileNotFoundError(f"Missing {path}. Fill it from {PENDING_PATH} first.")
+    cards = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(cards, list):
+        raise ValueError(f"{path} must contain a JSON array.")
+    return [normalize_card(item) for item in cards]
+
+
+def normalize_card(item: dict[str, Any]) -> dict[str, str]:
+    card = {field: str(item.get(field, "")).strip() for field in FIELDS}
+    card["Front"] = card["Front"] or str(item.get("front", "")).strip()
+    card["Meaning"] = card["Meaning"] or str(item.get("meaning", "")).strip()
+    card["Example"] = card["Example"] or str(item.get("example", "")).strip()
+    card["Source"] = card["Source"] or str(item.get("source", "")).strip()
+    if not card["Front"]:
+        raise ValueError(f"Card is missing Front: {item}")
+    return card
+
+
+def filter_pending_candidates(
+    candidates: list[QuoteCandidate],
+    enriched_path: Path = ENRICHED_PATH,
+) -> tuple[list[QuoteCandidate], int]:
+    if not enriched_path.exists():
+        return candidates, 0
+
+    cards = json.loads(enriched_path.read_text(encoding="utf-8"))
+    if not isinstance(cards, list):
+        raise ValueError(f"{enriched_path} must contain a JSON array.")
+
+    complete_fronts = {
+        normalize_front(card["Front"])
+        for card in (normalize_card(item) for item in cards)
+        if card["Meaning"] and card["Example"]
+    }
+    pending = [candidate for candidate in candidates if normalize_front(candidate.front) not in complete_fronts]
+    return pending, len(candidates) - len(pending)
+
+
+def tts_voice_for_label(label: str) -> str:
+    if label == "example":
+        return EDGE_TTS_EXAMPLE_VOICE
+    return EDGE_TTS_VOICE
+
+
+def safe_audio_filename(value: str, label: str = "front") -> str:
+    normalized = normalize_front(value)
+    slug = re.sub(r"[^a-z0-9]+", "_", normalized).strip("_")[:40] or "audio"
+    digest_source = f"{label}:{tts_voice_for_label(label)}:{normalized}"
+    digest = hashlib.sha1(digest_source.encode("utf-8")).hexdigest()[:10]
+    prefix = "yb" if label == "front" else f"yb_{label}"
+    return f"{prefix}_{slug}_{digest}.mp3"
+
+
+def sound_field(filename: str) -> str:
+    return f"[sound:{filename}]"
+
+
+def sound_filename_from_field(value: str) -> str | None:
+    match = re.fullmatch(r"\[sound:([^\]]+)\]", value.strip())
+    return match.group(1) if match else None
+
+
+async def generate_audio_for_cards(cards: list[dict[str, str]]) -> dict[str, int]:
+    try:
+        import edge_tts
+    except ImportError as exc:
+        raise RuntimeError("Install edge-tts with: pip install -r requirements.txt") from exc
+
+    AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+    generated = 0
+    reused = 0
+
+    for card in cards:
+        for text_field, sound_field_name, label in AUDIO_FIELD_SPECS:
+            text = card.get(text_field, "").strip()
+            if not text:
+                continue
+            filename = safe_audio_filename(text, label)
+            output_path = AUDIO_DIR / filename
+            card[sound_field_name] = sound_field(filename)
+            if output_path.exists():
+                reused += 1
+                continue
+            communicate = edge_tts.Communicate(text, tts_voice_for_label(label))
+            await communicate.save(str(output_path))
+            generated += 1
+
+    ENRICHED_PATH.parent.mkdir(parents=True, exist_ok=True)
+    ENRICHED_PATH.write_text(json.dumps(cards, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"audio_generated": generated, "audio_reused": reused}

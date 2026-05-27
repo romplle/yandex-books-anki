@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+
+.env
+.env.*
+
+data/*
+!data/.gitkeep
+
+tests/
