@@ -4,8 +4,12 @@ __pycache__/
 
 .env
 .env.*
+!.env.example
 
 data/*
 !data/.gitkeep
+!data/quotes/
+data/quotes/*
+!data/quotes/.gitkeep
 
 tests/
