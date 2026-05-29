@@ -49,6 +49,14 @@ from yandex_books_anki.core import (
     sound_filename_from_field,
     tts_voice_for_label,
 )
+from yandex_books_anki.enricher import (
+    GigaChatMeaningClient,
+    build_enrichment_prompt,
+    enrich_pending_cards,
+    env_bool,
+    load_dotenv,
+    parse_enrichment_response,
+)
 from yandex_books_anki.scraper import (
     BOOK_QUOTES_GRAPHQL_QUERY,
     collect_all_candidates,
@@ -108,6 +116,12 @@ def cmd_audio(_: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_enrich(_: argparse.Namespace) -> int:
+    report = enrich_pending_cards()
+    print_report("Enrich report", report)
+    return 0
+
+
 def cmd_import(_: argparse.Namespace) -> int:
     cards = load_cards()
     report = import_cards(cards)
@@ -129,6 +143,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("scrape", help="Fetch public Yandex Books quotes into data/quotes_pending.json")
     subparsers.add_parser("csv", help="Read exported CSV quotes from data/quotes into data/quotes_pending.json")
+    subparsers.add_parser("enrich", help="Generate Meaning and Example with GigaChat")
     subparsers.add_parser("audio", help="Generate Front audio for data/cards_enriched.json")
     subparsers.add_parser("import", help="Import enriched cards into Anki")
     subparsers.add_parser("run", help="Generate audio and import enriched cards")
@@ -142,6 +157,7 @@ def main(argv: list[str] | None = None) -> int:
     commands = {
         "scrape": cmd_scrape,
         "csv": cmd_csv,
+        "enrich": cmd_enrich,
         "audio": cmd_audio,
         "import": cmd_import,
         "run": cmd_run,
