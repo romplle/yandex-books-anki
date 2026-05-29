@@ -6,7 +6,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 PROFILE_URL = "https://books.yandex.ru/@b8582783786/quotes"
@@ -83,10 +83,56 @@ class QuoteCandidate:
     page_url: str
 
 
-def normalize_front(value: str) -> str:
+SPACY_MODEL = "en_core_web_sm"
+SpacyNlp = Callable[[str], Any]
+_SPACY_NLP: SpacyNlp | None = None
+
+
+def set_spacy_nlp_for_tests(nlp: SpacyNlp | None) -> None:
+    global _SPACY_NLP
+    _SPACY_NLP = nlp
+
+
+def spacy_nlp() -> SpacyNlp:
+    global _SPACY_NLP
+    if _SPACY_NLP is not None:
+        return _SPACY_NLP
+
+    try:
+        import spacy
+    except ImportError as exc:
+        raise RuntimeError("Install spaCy with: pip install -r requirements.txt") from exc
+
+    try:
+        _SPACY_NLP = spacy.load(SPACY_MODEL, disable=["parser", "ner"])
+    except OSError as exc:
+        raise RuntimeError(f"Install the spaCy English model with: python -m spacy download {SPACY_MODEL}") from exc
+    return _SPACY_NLP
+
+
+def canonical_token_text(token: Any) -> str:
+    lemma = str(getattr(token, "lemma_", "") or "").strip()
+    text = str(getattr(token, "text", "") or "").strip()
+    if not lemma or lemma == "-PRON-":
+        lemma = text
+    return lemma.lower()
+
+
+def canonical_front(value: str) -> str:
     value = html.unescape(value).replace("\u00a0", " ")
     value = value.strip(" \t\r\n\"'`.,;:!?")
-    return re.sub(r"\s+", " ", value).lower()
+    value = re.sub(r"\s+", " ", value).lower()
+    if not value:
+        return ""
+
+    lemmas: list[str] = []
+    for token in spacy_nlp()(value):
+        if getattr(token, "is_space", False) or getattr(token, "is_punct", False):
+            continue
+        lemma = canonical_token_text(token).strip(" \t\r\n\"'`.,;:!?")
+        if lemma:
+            lemmas.append(lemma)
+    return re.sub(r"\s+", " ", " ".join(lemmas)).strip()
 
 
 def is_likely_english_vocabulary(value: str) -> bool:
@@ -125,12 +171,19 @@ def load_cards(path: Path = ENRICHED_PATH) -> list[dict[str, str]]:
     return [normalize_card(item) for item in cards]
 
 
+def clean_text(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
 def normalize_card(item: dict[str, Any]) -> dict[str, str]:
-    card = {field: str(item.get(field, "")).strip() for field in FIELDS}
-    card["Front"] = card["Front"] or str(item.get("front", "")).strip()
-    card["Meaning"] = card["Meaning"] or str(item.get("meaning", "")).strip()
-    card["Example"] = card["Example"] or str(item.get("example", "")).strip()
-    card["Source"] = card["Source"] or str(item.get("source", "")).strip()
+    card = {field: clean_text(item.get(field, "")) for field in FIELDS}
+    card["Front"] = card["Front"] or clean_text(item.get("front", ""))
+    card["Front"] = canonical_front(card["Front"])
+    card["Meaning"] = card["Meaning"] or clean_text(item.get("meaning", ""))
+    card["Example"] = card["Example"] or clean_text(item.get("example", ""))
+    card["Source"] = card["Source"] or clean_text(item.get("source", ""))
     if not card["Front"]:
         raise ValueError(f"Card is missing Front: {item}")
     return card
@@ -148,11 +201,11 @@ def filter_pending_candidates(
         raise ValueError(f"{enriched_path} must contain a JSON array.")
 
     complete_fronts = {
-        normalize_front(card["Front"])
+        canonical_front(card["Front"])
         for card in (normalize_card(item) for item in cards)
         if card["Meaning"] and card["Example"]
     }
-    pending = [candidate for candidate in candidates if normalize_front(candidate.front) not in complete_fronts]
+    pending = [candidate for candidate in candidates if canonical_front(candidate.front) not in complete_fronts]
     return pending, len(candidates) - len(pending)
 
 
@@ -163,9 +216,10 @@ def tts_voice_for_label(label: str) -> str:
 
 
 def safe_audio_filename(value: str, label: str = "front") -> str:
-    normalized = normalize_front(value)
+    text = value.strip()
+    normalized = canonical_front(value)
     slug = re.sub(r"[^a-z0-9]+", "_", normalized).strip("_")[:40] or "audio"
-    digest_source = f"{label}:{tts_voice_for_label(label)}:{normalized}"
+    digest_source = f"{label}:{tts_voice_for_label(label)}:{text}"
     digest = hashlib.sha1(digest_source.encode("utf-8")).hexdigest()[:10]
     prefix = "yb" if label == "front" else f"yb_{label}"
     return f"{prefix}_{slug}_{digest}.mp3"

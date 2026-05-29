@@ -15,10 +15,10 @@ from .core import (
     PROFILE_LOGIN,
     PROFILE_URL,
     QuoteCandidate,
+    canonical_front,
     is_generic_source,
     is_likely_english_vocabulary,
     is_quote_meta_line,
-    normalize_front,
 )
 
 
@@ -363,14 +363,14 @@ def collect_candidates(profile_url: str = PROFILE_URL) -> tuple[list[QuoteCandid
         source = extract_source(page_html)
         for quote in quote_texts:
             found += 1
-            normalized = normalize_front(quote)
-            if normalized in seen:
-                continue
-            seen.add(normalized)
             if not is_likely_english_vocabulary(quote):
                 skipped += 1
                 continue
-            candidates.append(QuoteCandidate(front=quote.strip(), source=source, page_url=page_url))
+            normalized = canonical_front(quote)
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            candidates.append(QuoteCandidate(front=normalized, source=source, page_url=page_url))
 
     return candidates, {
         "pages_fetched": len(pages),
@@ -402,7 +402,7 @@ def collect_csv_candidates(csv_dir: Path = CSV_QUOTES_DIR) -> tuple[list[QuoteCa
             book_title = str(row.get("book_title", "")).strip()
             authors = str(row.get("book_authors", "")).strip()
             source = " — ".join(part for part in [authors, book_title] if part) or path.stem
-            candidates.append(QuoteCandidate(front=front, source=source, page_url=str(path)))
+            candidates.append(QuoteCandidate(front=canonical_front(front), source=source, page_url=str(path)))
 
     return candidates, {
         "csv_files": len(files),
@@ -416,7 +416,8 @@ def merge_candidates(candidate_groups: list[list[QuoteCandidate]]) -> list[Quote
     indexes: dict[str, int] = {}
     for candidates in candidate_groups:
         for candidate in candidates:
-            normalized = normalize_front(candidate.front)
+            candidate = QuoteCandidate(canonical_front(candidate.front), candidate.source, candidate.page_url)
+            normalized = canonical_front(candidate.front)
             if normalized in indexes:
                 existing_index = indexes[normalized]
                 if is_generic_source(merged[existing_index].source) and not is_generic_source(candidate.source):

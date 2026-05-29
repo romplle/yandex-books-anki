@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import Protocol
 
-from .core import ENRICHED_PATH, FIELDS, PENDING_PATH, normalize_card, normalize_front
+from .core import ENRICHED_PATH, FIELDS, PENDING_PATH, canonical_front, normalize_card
 
 
 DEFAULT_GIGACHAT_SCOPE = "GIGACHAT_API_PERS"
@@ -132,6 +132,18 @@ def output_card_from_pending(item: dict[str, str]) -> dict[str, str]:
     return {field: normalized.get(field, "") for field in FIELDS}
 
 
+def remove_completed_pending_items(
+    pending_items: list[dict[str, str]],
+    cards: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    complete_fronts = {
+        canonical_front(card["Front"])
+        for card in cards
+        if card.get("Meaning", "").strip() and card.get("Example", "").strip()
+    }
+    return [item for item in pending_items if canonical_front(str(item.get("Front", ""))) not in complete_fronts]
+
+
 def enrich_pending_cards(
     client: MeaningClient | None = None,
     pending_path: Path = PENDING_PATH,
@@ -140,19 +152,26 @@ def enrich_pending_cards(
     pending_items = load_json_array(pending_path)
     existing_items = load_json_array(enriched_path) if enriched_path.exists() else []
     cards = [normalize_card(item) for item in existing_items]
-    indexes = {normalize_front(card["Front"]): index for index, card in enumerate(cards)}
+    indexes = {canonical_front(card["Front"]): index for index, card in enumerate(cards)}
 
-    client = client or GigaChatMeaningClient()
+    meaning_client = client
     seen_pending: set[str] = set()
     completed_skipped = 0
     duplicates_skipped = 0
     updated = 0
     added = 0
 
+    def get_client() -> MeaningClient:
+        nonlocal meaning_client
+        if meaning_client is None:
+            meaning_client = GigaChatMeaningClient()
+        return meaning_client
+
     for item in pending_items:
         prompt_card = {key: str(value).strip() for key, value in item.items()}
         card = output_card_from_pending(prompt_card)
-        normalized = normalize_front(card["Front"])
+        prompt_card["Front"] = card["Front"]
+        normalized = canonical_front(card["Front"])
         if normalized in seen_pending:
             duplicates_skipped += 1
             continue
@@ -164,7 +183,7 @@ def enrich_pending_cards(
             if existing["Meaning"] and existing["Example"]:
                 completed_skipped += 1
                 continue
-            enrichment = client.generate(prompt_card)
+            enrichment = get_client().generate(prompt_card)
             existing["Meaning"] = enrichment["Meaning"]
             existing["Example"] = enrichment["Example"]
             if not existing["Source"]:
@@ -172,7 +191,7 @@ def enrich_pending_cards(
             updated += 1
             continue
 
-        enrichment = client.generate(prompt_card)
+        enrichment = get_client().generate(prompt_card)
         card["Meaning"] = enrichment["Meaning"]
         card["Example"] = enrichment["Example"]
         indexes[normalized] = len(cards)
@@ -181,8 +200,11 @@ def enrich_pending_cards(
 
     enriched_path.parent.mkdir(parents=True, exist_ok=True)
     enriched_path.write_text(json.dumps(cards, ensure_ascii=False, indent=2), encoding="utf-8")
+    remaining_pending = remove_completed_pending_items(pending_items, cards)
+    pending_path.write_text(json.dumps(remaining_pending, ensure_ascii=False, indent=2), encoding="utf-8")
     return {
         "pending_items": len(pending_items),
+        "pending_remaining": len(remaining_pending),
         "already_enriched_skipped": completed_skipped,
         "duplicates_skipped": duplicates_skipped,
         "cards_updated": updated,

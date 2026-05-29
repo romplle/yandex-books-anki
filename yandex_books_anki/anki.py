@@ -15,7 +15,7 @@ from .core import (
     FIELDS,
     FRONT_TEMPLATE,
     MODEL_NAME,
-    normalize_front,
+    canonical_front,
     safe_audio_filename,
     sound_field,
     sound_filename_from_field,
@@ -97,7 +97,7 @@ def existing_notes_by_front() -> dict[str, dict[str, Any]]:
     for note in notes:
         front = note.get("fields", {}).get("Front", {}).get("value", "")
         if front:
-            result[normalize_front(front)] = note
+            result[canonical_front(front)] = note
     return result
 
 
@@ -151,7 +151,7 @@ def import_cards(cards: list[dict[str, str]]) -> dict[str, int]:
     skipped_incomplete = 0
 
     for card in cards:
-        normalized = normalize_front(card["Front"])
+        normalized = canonical_front(card["Front"])
         if not card["Meaning"] or not card["Example"]:
             skipped_incomplete += 1
             continue
