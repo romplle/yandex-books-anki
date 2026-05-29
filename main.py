@@ -33,8 +33,6 @@ from yandex_books_anki.core import (
     FRONT_TEMPLATE,
     MODEL_NAME,
     PENDING_PATH,
-    PROFILE_LOGIN,
-    PROFILE_URL,
     QuoteCandidate,
     canonical_front,
     set_spacy_nlp_for_tests,
@@ -45,6 +43,7 @@ from yandex_books_anki.core import (
     is_quote_meta_line,
     load_cards,
     normalize_card,
+    profile_url_for_login,
     safe_audio_filename,
     sound_field,
     sound_filename_from_field,
@@ -87,8 +86,9 @@ def print_pending_next_step(pending_count: int) -> None:
         print("No pending cards. Everything found already has Meaning and Example.")
 
 
-def cmd_scrape(_: argparse.Namespace) -> int:
-    candidates, report = collect_all_candidates()
+def cmd_scrape(args: argparse.Namespace) -> int:
+    profile_url = profile_url_for_login(args.login)
+    candidates, report = collect_all_candidates(profile_url)
     candidates, skipped_enriched = filter_pending_candidates(candidates)
     report["already_enriched_skipped"] = skipped_enriched
     report["pending_written"] = len(candidates)
@@ -130,24 +130,16 @@ def cmd_import(_: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_run(_: argparse.Namespace) -> int:
-    cards = load_cards()
-    audio_report = asyncio.run(generate_audio_for_cards(cards))
-    import_report = import_cards(cards)
-    print_report("Run report", {**audio_report, **import_report})
-    return 0
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Yandex Books quotes to Anki vocabulary cards.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("scrape", help="Fetch public Yandex Books quotes into data/quotes_pending.json")
+    scrape_parser = subparsers.add_parser("scrape", help="Fetch public Yandex Books quotes into data/quotes_pending.json")
+    scrape_parser.add_argument("login", help="Yandex Books public profile login, with or without leading @")
     subparsers.add_parser("csv", help="Read exported CSV quotes from data/quotes into data/quotes_pending.json")
     subparsers.add_parser("enrich", help="Generate Meaning and Example with GigaChat")
     subparsers.add_parser("audio", help="Generate Front audio for data/cards_enriched.json")
     subparsers.add_parser("import", help="Import enriched cards into Anki")
-    subparsers.add_parser("run", help="Generate audio and import enriched cards")
 
     return parser
 
@@ -161,7 +153,6 @@ def main(argv: list[str] | None = None) -> int:
         "enrich": cmd_enrich,
         "audio": cmd_audio,
         "import": cmd_import,
-        "run": cmd_run,
     }
     try:
         return commands[args.command](args)

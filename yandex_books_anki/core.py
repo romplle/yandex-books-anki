@@ -9,8 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 
-PROFILE_URL = "https://books.yandex.ru/@b8582783786/quotes"
-PROFILE_LOGIN = "b8582783786"
+YANDEX_BOOKS_BASE_URL = "https://books.yandex.ru"
 
 DECK_NAME = "Yandex Books Vocabulary"
 MODEL_NAME = "YandexBooksVocabulary"
@@ -81,6 +80,13 @@ class QuoteCandidate:
     front: str
     source: str
     page_url: str
+
+
+def profile_url_for_login(login: str) -> str:
+    normalized = login.strip().lstrip("@")
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", normalized):
+        raise ValueError("Yandex Books login must contain only letters, digits, underscores, or hyphens.")
+    return f"{YANDEX_BOOKS_BASE_URL}/@{normalized}/quotes"
 
 
 SPACY_MODEL = "en_core_web_sm"

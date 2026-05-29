@@ -12,8 +12,6 @@ from bs4 import BeautifulSoup
 from .core import (
     CSV_QUOTES_DIR,
     PENDING_PATH,
-    PROFILE_LOGIN,
-    PROFILE_URL,
     QuoteCandidate,
     canonical_front,
     is_generic_source,
@@ -224,12 +222,22 @@ def fetch_html(url: str) -> str:
     return response.text
 
 
-def extract_book_quote_links(html_text: str, base_url: str = PROFILE_URL) -> list[str]:
+def extract_profile_login_from_url(url: str) -> str:
+    parts = [part for part in urlparse(url).path.split("/") if part]
+    for part in parts:
+        if part.startswith("@") and len(part) > 1:
+            return part[1:]
+    raise ValueError(f"Could not extract Yandex Books login from profile URL: {url}")
+
+
+def extract_book_quote_links(html_text: str, base_url: str) -> list[str]:
     soup = BeautifulSoup(html_text, "html.parser")
+    login = extract_profile_login_from_url(base_url)
+    book_quotes_path = re.compile(rf"/@{re.escape(login)}/books/[^/]+/quotes/?$")
     links: set[str] = set()
     for link in soup.find_all("a", href=True):
         href = link["href"]
-        if re.search(r"/@b8582783786/books/[^/]+/quotes/?$", href):
+        if book_quotes_path.search(urlparse(href).path):
             links.add(urljoin(base_url, href))
     return sorted(links)
 
@@ -289,7 +297,7 @@ def extract_quote_texts(html_text: str) -> list[str]:
     return quotes
 
 
-def fetch_book_quote_texts_graphql(book_uuid: str, login: str = PROFILE_LOGIN, step: int = 100) -> list[str]:
+def fetch_book_quote_texts_graphql(book_uuid: str, login: str, step: int = 100) -> list[str]:
     cursor = ""
     quotes: list[str] = []
     seen_cursors: set[str] = set()
@@ -336,8 +344,9 @@ def fetch_book_quote_texts_graphql(book_uuid: str, login: str = PROFILE_LOGIN, s
     return quotes
 
 
-def collect_candidates(profile_url: str = PROFILE_URL) -> tuple[list[QuoteCandidate], dict[str, int]]:
+def collect_candidates(profile_url: str) -> tuple[list[QuoteCandidate], dict[str, int]]:
     profile_html = fetch_html(profile_url)
+    login = extract_profile_login_from_url(profile_url)
     pages: list[tuple[str, str, list[str]]] = []
     graphql_pages = 0
     html_fallback_pages = 0
@@ -346,7 +355,9 @@ def collect_candidates(profile_url: str = PROFILE_URL) -> tuple[list[QuoteCandid
         page_html = fetch_html(link)
         book_uuid = extract_book_uuid_from_quote_url(link)
         try:
-            quote_texts = fetch_book_quote_texts_graphql(book_uuid) if book_uuid else extract_quote_texts(page_html)
+            quote_texts = (
+                fetch_book_quote_texts_graphql(book_uuid, login=login) if book_uuid else extract_quote_texts(page_html)
+            )
             graphql_pages += 1 if book_uuid else 0
         except Exception:
             quote_texts = extract_quote_texts(page_html)
@@ -428,8 +439,8 @@ def merge_candidates(candidate_groups: list[list[QuoteCandidate]]) -> list[Quote
     return merged
 
 
-def collect_all_candidates() -> tuple[list[QuoteCandidate], dict[str, int]]:
-    web_candidates, web_report = collect_candidates()
+def collect_all_candidates(profile_url: str) -> tuple[list[QuoteCandidate], dict[str, int]]:
+    web_candidates, web_report = collect_candidates(profile_url)
     csv_candidates, csv_report = collect_csv_candidates()
     merged = merge_candidates([web_candidates, csv_candidates])
     report = {**web_report, **csv_report}
