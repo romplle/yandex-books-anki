@@ -4,25 +4,20 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Protocol
+from typing import Any
 
 from .core import ENRICHED_PATH, FIELDS, PENDING_PATH, canonical_front, normalize_card
 
 
 DEFAULT_GIGACHAT_SCOPE = "GIGACHAT_API_PERS"
 DEFAULT_GIGACHAT_MODEL = "GigaChat-2"
+DEFAULT_GIGACHAT_VERIFY_SSL_CERTS = False
 
 
-class MeaningClient(Protocol):
-    def generate(self, card: dict[str, str]) -> dict[str, str]:
-        ...
-
-
-def load_dotenv(path: Path = Path(".env")) -> int:
+def load_dotenv(path: Path = Path(".env")) -> None:
     if not path.exists():
-        return 0
+        return
 
-    loaded = 0
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
@@ -36,15 +31,6 @@ def load_dotenv(path: Path = Path(".env")) -> int:
         value = value.strip().strip("\"'")
         if key and key not in os.environ:
             os.environ[key] = value
-            loaded += 1
-    return loaded
-
-
-def env_bool(name: str, default: bool) -> bool:
-    value = os.environ.get(name)
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def build_enrichment_prompt(card: dict[str, str]) -> str:
@@ -84,7 +70,7 @@ def parse_enrichment_response(content: str, front: str) -> dict[str, str]:
     return {"Meaning": meaning, "Example": example}
 
 
-class GigaChatMeaningClient:
+class GigaChatEnrichmentClient:
     def __init__(
         self,
         credentials: str | None = None,
@@ -92,38 +78,25 @@ class GigaChatMeaningClient:
         model: str | None = None,
         verify_ssl_certs: bool | None = None,
     ) -> None:
+        from gigachat import GigaChat
+
         load_dotenv()
-        credentials = credentials or os.environ.get("GIGACHAT_CREDENTIALS")
-        if not credentials:
-            raise RuntimeError("Missing GIGACHAT_CREDENTIALS. Set it in the environment or in .env.")
-
-        try:
-            from gigachat import GigaChat
-        except ImportError as exc:
-            raise RuntimeError("Install GigaChat SDK with: pip install -r requirements.txt") from exc
-
-        if verify_ssl_certs is None:
-            verify_ssl_certs = env_bool("GIGACHAT_VERIFY_SSL_CERTS", False)
 
         self._client = GigaChat(
-            credentials=credentials,
+            credentials=credentials or os.environ["GIGACHAT_CREDENTIALS"],
             scope=scope or os.environ.get("GIGACHAT_SCOPE", DEFAULT_GIGACHAT_SCOPE),
             model=model or os.environ.get("GIGACHAT_MODEL", DEFAULT_GIGACHAT_MODEL),
-            verify_ssl_certs=verify_ssl_certs,
+            verify_ssl_certs=verify_ssl_certs or os.environ.get("GIGACHAT_VERIFY_SSL_CERTS", DEFAULT_GIGACHAT_VERIFY_SSL_CERTS),
         )
 
-    def generate(self, card: dict[str, str]) -> dict[str, str]:
+    def generate_enrichment(self, card: dict[str, str]) -> dict[str, str]:
         response = self._client.chat(build_enrichment_prompt(card))
         content = response.choices[0].message.content
         return parse_enrichment_response(content, card["Front"])
 
 
 def load_json_array(path: Path) -> list[dict[str, str]]:
-    if not path.exists():
-        raise FileNotFoundError(f"Missing {path}. Run scrape or csv first.")
     payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, list):
-        raise ValueError(f"{path} must contain a JSON array.")
     return [dict(item) for item in payload]
 
 
@@ -145,7 +118,7 @@ def remove_completed_pending_items(
 
 
 def enrich_pending_cards(
-    client: MeaningClient | None = None,
+    client: Any = None,
     pending_path: Path = PENDING_PATH,
     enriched_path: Path = ENRICHED_PATH,
 ) -> dict[str, int]:
@@ -154,18 +127,12 @@ def enrich_pending_cards(
     cards = [normalize_card(item) for item in existing_items]
     indexes = {canonical_front(card["Front"]): index for index, card in enumerate(cards)}
 
-    meaning_client = client
+    enrichment_client = client
     seen_pending: set[str] = set()
     completed_skipped = 0
     duplicates_skipped = 0
     updated = 0
     added = 0
-
-    def get_client() -> MeaningClient:
-        nonlocal meaning_client
-        if meaning_client is None:
-            meaning_client = GigaChatMeaningClient()
-        return meaning_client
 
     for item in pending_items:
         prompt_card = {key: str(value).strip() for key, value in item.items()}
@@ -183,7 +150,9 @@ def enrich_pending_cards(
             if existing["Meaning"] and existing["Example"]:
                 completed_skipped += 1
                 continue
-            enrichment = get_client().generate(prompt_card)
+            if enrichment_client is None:
+                enrichment_client = GigaChatEnrichmentClient()
+            enrichment = enrichment_client.generate_enrichment(prompt_card)
             existing["Meaning"] = enrichment["Meaning"]
             existing["Example"] = enrichment["Example"]
             if not existing["Source"]:
@@ -191,7 +160,9 @@ def enrich_pending_cards(
             updated += 1
             continue
 
-        enrichment = get_client().generate(prompt_card)
+        if enrichment_client is None:
+            enrichment_client = GigaChatEnrichmentClient()
+        enrichment = enrichment_client.generate_enrichment(prompt_card)
         card["Meaning"] = enrichment["Meaning"]
         card["Example"] = enrichment["Example"]
         indexes[normalized] = len(cards)

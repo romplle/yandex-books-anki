@@ -244,16 +244,15 @@ def extract_book_quote_links(html_text: str, base_url: str) -> list[str]:
 
 def extract_book_uuid_from_quote_url(url: str) -> str | None:
     parts = [part for part in urlparse(url).path.split("/") if part]
-    try:
-        book_index = parts.index("books")
-    except ValueError:
+    if "books" not in parts:
         return None
+    book_index = parts.index("books")
     if book_index + 1 >= len(parts):
         return None
     return parts[book_index + 1]
 
 
-def extract_source(html_text: str) -> str:
+def extract_source_from_html(html_text: str) -> str:
     soup = BeautifulSoup(html_text, "html.parser")
     lines = [re.sub(r"\s+", " ", item).strip() for item in soup.stripped_strings]
     for index, line in enumerate(lines):
@@ -344,7 +343,7 @@ def fetch_book_quote_texts_graphql(book_uuid: str, login: str, step: int = 100) 
     return quotes
 
 
-def collect_candidates(profile_url: str) -> tuple[list[QuoteCandidate], dict[str, int]]:
+def collect_web_candidates(profile_url: str) -> tuple[list[QuoteCandidate], dict[str, int]]:
     profile_html = fetch_html(profile_url)
     login = extract_profile_login_from_url(profile_url)
     pages: list[tuple[str, str, list[str]]] = []
@@ -371,7 +370,7 @@ def collect_candidates(profile_url: str) -> tuple[list[QuoteCandidate], dict[str
     skipped = 0
 
     for page_url, page_html, quote_texts in pages:
-        source = extract_source(page_html)
+        source = extract_source_from_html(page_html)
         for quote in quote_texts:
             found += 1
             if not is_likely_english_vocabulary(quote):
@@ -427,8 +426,8 @@ def merge_candidates(candidate_groups: list[list[QuoteCandidate]]) -> list[Quote
     indexes: dict[str, int] = {}
     for candidates in candidate_groups:
         for candidate in candidates:
-            candidate = QuoteCandidate(canonical_front(candidate.front), candidate.source, candidate.page_url)
             normalized = canonical_front(candidate.front)
+            candidate = QuoteCandidate(normalized, candidate.source, candidate.page_url)
             if normalized in indexes:
                 existing_index = indexes[normalized]
                 if is_generic_source(merged[existing_index].source) and not is_generic_source(candidate.source):
@@ -440,7 +439,7 @@ def merge_candidates(candidate_groups: list[list[QuoteCandidate]]) -> list[Quote
 
 
 def collect_all_candidates(profile_url: str) -> tuple[list[QuoteCandidate], dict[str, int]]:
-    web_candidates, web_report = collect_candidates(profile_url)
+    web_candidates, web_report = collect_web_candidates(profile_url)
     csv_candidates, csv_report = collect_csv_candidates()
     merged = merge_candidates([web_candidates, csv_candidates])
     report = {**web_report, **csv_report}

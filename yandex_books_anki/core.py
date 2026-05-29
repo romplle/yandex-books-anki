@@ -6,7 +6,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 
 YANDEX_BOOKS_BASE_URL = "https://books.yandex.ru"
@@ -15,7 +15,7 @@ DECK_NAME = "Yandex Books Vocabulary"
 MODEL_NAME = "YandexBooksVocabulary"
 ANKI_CONNECT_URL = "http://localhost:8765"
 
-EDGE_TTS_VOICE = "en-US-JennyNeural"
+EDGE_TTS_DEFAULT_VOICE = "en-US-JennyNeural"
 EDGE_TTS_EXAMPLE_VOICE = "en-US-GuyNeural"
 
 DATA_DIR = Path("data")
@@ -90,29 +90,22 @@ def profile_url_for_login(login: str) -> str:
 
 
 SPACY_MODEL = "en_core_web_sm"
-SpacyNlp = Callable[[str], Any]
-_SPACY_NLP: SpacyNlp | None = None
+_SPACY_NLP: Any = None
 
 
-def set_spacy_nlp_for_tests(nlp: SpacyNlp | None) -> None:
+def set_spacy_nlp_for_tests(nlp: Any) -> None:
     global _SPACY_NLP
     _SPACY_NLP = nlp
 
 
-def spacy_nlp() -> SpacyNlp:
+def spacy_nlp() -> Any:
     global _SPACY_NLP
     if _SPACY_NLP is not None:
         return _SPACY_NLP
 
-    try:
-        import spacy
-    except ImportError as exc:
-        raise RuntimeError("Install spaCy with: pip install -r requirements.txt") from exc
+    import spacy
 
-    try:
-        _SPACY_NLP = spacy.load(SPACY_MODEL, disable=["parser", "ner"])
-    except OSError as exc:
-        raise RuntimeError(f"Install the spaCy English model with: python -m spacy download {SPACY_MODEL}") from exc
+    _SPACY_NLP = spacy.load(SPACY_MODEL, disable=["parser", "ner"])
     return _SPACY_NLP
 
 
@@ -169,18 +162,12 @@ def is_generic_source(source: str) -> bool:
 
 
 def load_cards(path: Path = ENRICHED_PATH) -> list[dict[str, str]]:
-    if not path.exists():
-        raise FileNotFoundError(f"Missing {path}. Fill it from {PENDING_PATH} first.")
     cards = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(cards, list):
-        raise ValueError(f"{path} must contain a JSON array.")
     return [normalize_card(item) for item in cards]
 
 
 def clean_text(value: Any) -> str:
-    if value is None:
-        return ""
-    return str(value).strip()
+    return "" if value is None else str(value).strip()
 
 
 def normalize_card(item: dict[str, Any]) -> dict[str, str]:
@@ -202,13 +189,9 @@ def filter_pending_candidates(
     if not enriched_path.exists():
         return candidates, 0
 
-    cards = json.loads(enriched_path.read_text(encoding="utf-8"))
-    if not isinstance(cards, list):
-        raise ValueError(f"{enriched_path} must contain a JSON array.")
-
     complete_fronts = {
-        canonical_front(card["Front"])
-        for card in (normalize_card(item) for item in cards)
+        card["Front"]
+        for card in load_cards(enriched_path)
         if card["Meaning"] and card["Example"]
     }
     pending = [candidate for candidate in candidates if canonical_front(candidate.front) not in complete_fronts]
@@ -218,7 +201,7 @@ def filter_pending_candidates(
 def tts_voice_for_label(label: str) -> str:
     if label == "example":
         return EDGE_TTS_EXAMPLE_VOICE
-    return EDGE_TTS_VOICE
+    return EDGE_TTS_DEFAULT_VOICE
 
 
 def safe_audio_filename(value: str, label: str = "front") -> str:
@@ -241,10 +224,7 @@ def sound_filename_from_field(value: str) -> str | None:
 
 
 async def generate_audio_for_cards(cards: list[dict[str, str]]) -> dict[str, int]:
-    try:
-        import edge_tts
-    except ImportError as exc:
-        raise RuntimeError("Install edge-tts with: pip install -r requirements.txt") from exc
+    import edge_tts
 
     AUDIO_DIR.mkdir(parents=True, exist_ok=True)
     generated = 0

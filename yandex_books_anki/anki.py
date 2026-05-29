@@ -47,7 +47,7 @@ def ensure_anki_deck_and_model() -> None:
 
     model_names = anki_request("modelNames")
     if MODEL_NAME in model_names:
-        update_anki_model_templates()
+        update_anki_model()
         return
 
     anki_request(
@@ -63,10 +63,10 @@ def ensure_anki_deck_and_model() -> None:
             }
         ],
     )
-    update_anki_model_templates()
+    update_anki_model()
 
 
-def update_anki_model_templates() -> None:
+def update_anki_model() -> None:
     anki_request(
         "updateModelTemplates",
         model={
@@ -88,7 +88,7 @@ def update_anki_model_templates() -> None:
     )
 
 
-def existing_notes_by_front() -> dict[str, dict[str, Any]]:
+def existing_notes_by_canonical_front() -> dict[str, dict[str, Any]]:
     note_ids = anki_request("findNotes", query=f'deck:"{DECK_NAME}" note:"{MODEL_NAME}"')
     if not note_ids:
         return {}
@@ -144,7 +144,7 @@ def build_anki_note(card: dict[str, str]) -> dict[str, Any]:
 
 def import_cards(cards: list[dict[str, str]]) -> dict[str, int]:
     ensure_anki_deck_and_model()
-    existing_notes = existing_notes_by_front()
+    existing_notes = existing_notes_by_canonical_front()
     added = 0
     skipped_existing = 0
     updated_existing = 0
