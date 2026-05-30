@@ -12,6 +12,8 @@ from .core import ENRICHED_PATH, FIELDS, PENDING_PATH, canonical_front, normaliz
 DEFAULT_GIGACHAT_SCOPE = "GIGACHAT_API_PERS"
 DEFAULT_GIGACHAT_MODEL = "GigaChat-2"
 DEFAULT_GIGACHAT_VERIFY_SSL_CERTS = False
+DEFAULT_GIGACHAT_TEMPERATURE = 0.3
+DEFAULT_GIGACHAT_MAX_TOKENS = 120
 
 
 def load_dotenv(path: Path = Path(".env")) -> None:
@@ -36,17 +38,32 @@ def load_dotenv(path: Path = Path(".env")) -> None:
 def build_enrichment_prompt(card: dict[str, str]) -> str:
     source = card.get("Source", "").strip() or "unknown source"
     page_url = card.get("PageURL", "").strip()
-    page_line = f"\nPage URL: {page_url}" if page_url else ""
     return (
-        "You create concise Anki vocabulary card fields for an English learner.\n"
-        "Return only valid JSON with exactly these string keys: Meaning, Example.\n"
-        "Meaning must be a short English definition, not a Russian translation.\n"
-        "Example must be one natural English sentence using the word or phrase.\n"
-        "Do not include markdown, comments, or extra keys.\n\n"
-        f"Word or phrase: {card['Front']}\n"
+        "Create Anki vocabulary card fields for a B2 English learner.\n"
+        "Return only valid JSON with exactly these keys: Meaning, Example.\n"
+        "Meaning must be a short and simple English definition.\n"
+        "Example must be one natural English sentence using the word or phrase.\n\n"
+        "Input word: meticulous\n"
+        "Source: Brandon Sanderson — The Well of Ascension\n"
+        'Output: {"Meaning":"very careful and exact","Example":"She kept meticulous notes during the meeting."}\n\n'
+        "Input word: daunt\n"
+        "Source: Pierce Brown — Red Rising\n"
+        'Output: {"Meaning":"to cause fear or discouragement","Example":"The dark hallway daunted the explorers at first."}\n\n'
+        "Input word: tidbit\n"
+        "Source: Project Hail Mary — Andy Weir\n"
+        'Output: {"Meaning":"a small interesting piece of information","Example":"He shared a tidbit from the interview."}\n\n'
+        f"Input word: {card['Front']}\n"
         f"Source: {source}"
-        f"{page_line}"
+        "\nOutput:"
     )
+
+
+def build_chat_payload(card: dict[str, str]) -> dict[str, Any]:
+    return {
+        "messages": [{"role": "user", "content": build_enrichment_prompt(card)}],
+        "temperature": DEFAULT_GIGACHAT_TEMPERATURE,
+        "max_tokens": DEFAULT_GIGACHAT_MAX_TOKENS,
+    }
 
 
 def parse_enrichment_response(content: str, front: str) -> dict[str, str]:
@@ -63,6 +80,9 @@ def parse_enrichment_response(content: str, front: str) -> dict[str, str]:
     if not isinstance(payload, dict):
         raise ValueError(f"GigaChat returned a non-object response for {front!r}.")
 
+    payload = {str(key).strip(): value for key, value in payload.items()}
+    if "Meaning" not in payload and "Meanings" in payload:
+        payload["Meaning"] = payload.pop("Meanings")
     meaning = str(payload.get("Meaning", "")).strip()
     example = str(payload.get("Example", "")).strip()
     if not meaning or not example:
@@ -90,7 +110,7 @@ class GigaChatEnrichmentClient:
         )
 
     def generate_enrichment(self, card: dict[str, str]) -> dict[str, str]:
-        response = self._client.chat(build_enrichment_prompt(card))
+        response = self._client.chat(build_chat_payload(card))
         content = response.choices[0].message.content
         return parse_enrichment_response(content, card["Front"])
 
